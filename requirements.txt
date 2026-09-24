@@ -1,0 +1,27 @@
+# Python dependencies for the RFP Response Assistant (Streamlit Cloud).
+# Pinned to the versions verified locally. Streamlit Cloud runs:
+#   pip install -r requirements.txt
+# on a Python-only container — there is no Node.js step, which is why the Word
+# exporter is now pure-Python (python-docx) instead of the old Node/docx setup.
+
+streamlit==1.58.0
+anthropic==0.102.0      # Claude API — RFP parsing + section drafting
+voyageai==0.2.3         # embeddings for the bid knowledge base
+chromadb==1.5.9         # in-memory vector store (resets when the app sleeps)
+pymupdf==1.27.2.3       # PDF text extraction (imported as `fitz`)
+python-docx==1.2.0      # Word document generation (replaces exporter.js)
+python-dotenv==1.2.2    # loads .env locally; no-op on Cloud
+
+# ── ChromaDB transitive deps — pinned on purpose ────────────────────────────
+# chromadb imports the OpenTelemetry/gRPC stack at startup. If these are left
+# unpinned, a fresh install (like Streamlit Cloud's) can resolve an incompatible
+# protobuf + opentelemetry pair and crash on import with a protobuf
+# "_CheckCalledFromGeneratedFile" / descriptor error. These exact versions are a
+# known-good, mutually compatible set, so the cloud build matches what works.
+protobuf==6.33.6
+grpcio==1.80.0
+opentelemetry-api==1.42.1
+opentelemetry-sdk==1.42.1
+opentelemetry-proto==1.42.1
+opentelemetry-exporter-otlp-proto-common==1.42.1
+opentelemetry-exporter-otlp-proto-grpc==1.42.1
