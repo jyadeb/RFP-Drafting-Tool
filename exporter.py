@@ -1,22 +1,7 @@
 """
-exporter.py
------------
 Generates a formatted Word (.docx) document from bid draft sections.
-
-PURE-PYTHON VERSION (python-docx)
-  This used to be a thin bridge that wrote JSON to a temp file and called
-  `exporter.js` via a Node.js subprocess. That worked fine on a laptop where
-  Node is installed, but it cannot run on Streamlit Cloud — that environment is
-  a Python-only container with no `node` binary and no `npm install` step. So
-  the document generation has been reimplemented here in pure Python using the
-  `python-docx` package. No subprocess, no Node, no temp files.
-
-  The visual layout (cover page, per-section blocks, confidence badges,
-  action-items page, footer with page numbers) is reproduced as closely as
-  python-docx allows so the output matches the previous JS exporter.
-
-Public API (unchanged — what rfp_app.py / main.py call):
-    result_path, error = export_to_word(rfp_name, draft_sections, output_path)
+Document generation is implemented in pure Python using python-docx.
+AI-assistance was used.
 """
 
 import os
@@ -31,9 +16,8 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
 
-# ─── COLOUR PALETTE ─────────────────────────────────────────────────────────
-# RGBColor objects for text, and bare hex strings (no #) for cell shading,
-# which is applied through raw XML.
+
+# RGBColor objects for text, and bare hex strings (no #) for cell shading, which is applied through raw XML.
 class C:
     BRAND_BLUE = RGBColor(0x1F, 0x4E, 0x79)
     MID_BLUE   = RGBColor(0x2E, 0x75, 0xB6)
@@ -63,17 +47,8 @@ def _confidence_style(level: str):
     return C.LOW_RED, FILL_LOW_BG
 
 
-# ─── LOW-LEVEL XML HELPERS ───────────────────────────────────────────────────
-# python-docx exposes most styling through its API, but a few things
-# (paragraph borders, cell shading, the PAGE field) require touching the
-# underlying OOXML directly. Each helper below does one such thing.
-
+# paragraph borders and horizontal dividers
 def _set_paragraph_border(paragraph, edges: dict):
-    """
-    Add borders to a paragraph. `edges` maps an edge name to a spec dict, e.g.
-        {"bottom": {"sz": 6, "color": "2E75B6", "space": 1}}
-    Used for the horizontal-rule dividers and the quoted-requirement left bar.
-    """
     pPr = paragraph._p.get_or_add_pPr()
     pBdr = OxmlElement("w:pBdr")
     for edge in ("top", "left", "bottom", "right"):
@@ -89,7 +64,6 @@ def _set_paragraph_border(paragraph, edges: dict):
 
 
 def _shade_cell(cell, fill_hex: str):
-    """Set a solid background fill on a table cell."""
     tcPr = cell._tc.get_or_add_tcPr()
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear")
@@ -99,7 +73,6 @@ def _shade_cell(cell, fill_hex: str):
 
 
 def _set_cell_border(cell, edge: str, color_hex: str, sz: int = 4):
-    """Put a coloured border on one edge of a cell ('left', 'right', ...)."""
     tcPr = cell._tc.get_or_add_tcPr()
     borders = OxmlElement("w:tcBorders")
     el = OxmlElement(f"w:{edge}")
@@ -112,7 +85,6 @@ def _set_cell_border(cell, edge: str, color_hex: str, sz: int = 4):
 
 
 def _add_page_number_field(paragraph):
-    """Append a live { PAGE } field to a paragraph (used in the footer)."""
     run = paragraph.add_run()
     run.font.name = FONT
     run.font.size = Pt(8)
@@ -135,7 +107,6 @@ def _add_page_number_field(paragraph):
 
 def _styled_run(paragraph, text, *, size=11, color=C.TEXT_DARK, bold=False,
                 italic=False, all_caps=False, highlight=None):
-    """Add a text run to a paragraph with our standard font applied."""
     run = paragraph.add_run(text)
     run.font.name = FONT
     run.font.size = Pt(size)
@@ -148,14 +119,12 @@ def _styled_run(paragraph, text, *, size=11, color=C.TEXT_DARK, bold=False,
         run.font.highlight_color = highlight
     return run
 
-
+# vertical spacing
 def _spacer(doc):
-    """An empty paragraph for vertical spacing."""
     return doc.add_paragraph()
 
-
+#thin blue divider line
 def _horizontal_rule(doc):
-    """A thin blue divider line (empty paragraph with a bottom border)."""
     p = doc.add_paragraph()
     _set_paragraph_border(p, {"bottom": {"sz": 6, "color": FILL_MID_BLUE, "space": 1}})
     return p
@@ -364,9 +333,8 @@ def _build_action_items_page(doc, action_items):
         p = doc.add_paragraph(style="List Number")
         _styled_run(p, item, size=11, color=C.TEXT_DARK)
 
-
+# Page size, margins, default font, heading style, and footer.
 def _configure_document(doc, firm_name, rfp_name):
-    """Page size, margins, default font, heading style, and footer."""
     # Default (Normal) font
     normal = doc.styles["Normal"]
     normal.font.name = FONT
@@ -397,19 +365,8 @@ def _configure_document(doc, firm_name, rfp_name):
     _styled_run(footer_p, "\t", size=8, color=C.TEXT_MUTED)
     _add_page_number_field(footer_p)
 
-
+# scans all draft sections for [NEEDS CUSTOM INPUT] flags and returns them as a flat list of actions item string
 def extract_action_items(draft_sections: list) -> list:
-    """
-    Scans all draft sections for [NEEDS CUSTOM INPUT] flags and returns
-    them as a flat list of action item strings.
-
-    Args:
-        draft_sections: List of dicts from response_drafter.draft_section()
-                        Each has "requirement", "draft", "confidence", "confidence_reason"
-
-    Returns:
-        List of strings — one per [NEEDS CUSTOM INPUT] block found
-    """
     action_items = []
 
     for i, section in enumerate(draft_sections):
