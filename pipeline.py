@@ -1,21 +1,6 @@
-"""
-pipeline.py
------------
-Connects rfp_parser.py and bid_memory.py into one workflow.
 
-Step 1: Parse the RFP PDF → extract structured requirements
-Step 2: For each requirement, retrieve relevant past bid chunks
-Step 3: Print the paired output — requirement + matching experience
+#Connects rfp_parser.py and bid_memory.py into one workflow. Separate file for testing that is not used in the product
 
-This is the raw material a bid drafter would use to write a response.
-
-Usage:
-    python3 pipeline.py your_rfp.pdf
-
-Dependencies:
-    All dependencies from rfp_parser.py and bid_memory.py must be installed.
-    past_bid_1.txt, past_bid_2.txt, past_bid_3.txt must be in the same folder.
-"""
   # 1. imports
   # 2. argparse with --step choices
   # 3. if args.step in ("parse", "all"):  → call extract_text + parse_rfp, print JSON
