@@ -1,6 +1,4 @@
-"""
-rfp_app.py — Streamlit UI for the RFP Response Assistant
-"""
+#  Streamlit UI for the RFP Response Assistant. AI-assistance was used. 
 
 import os
 import re
@@ -9,7 +7,6 @@ import streamlit as st
 
 
 # ── Page config ────────────────────────────────────────────────────────────────
-# Must be the first Streamlit command on the page.
 st.set_page_config(
     page_title="RFP Response Assistant",
     page_icon="🏗️",
@@ -17,28 +14,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-
 # ── Secrets → environment bridge ────────────────────────────────────────────────
-# The backend modules (rfp_parser, bid_memory, response_drafter) read their API
-# keys with os.getenv(...) and, in some cases, construct their API clients at
-# IMPORT time. Locally those keys come from a .env file via python-dotenv. On
-# Streamlit Cloud there is no .env — keys live in the Streamlit secrets manager.
-# Copy them into os.environ here, BEFORE importing the backend, so the same
-# os.getenv(...) code works identically in both places.
 for _secret_key in ("ANTHROPIC_API_KEY", "VOYAGE_API_KEY"):
     try:
         if _secret_key in st.secrets and not os.environ.get(_secret_key):
             os.environ[_secret_key] = str(st.secrets[_secret_key])
     except Exception:
-        # st.secrets raises if no secrets file/manager is configured at all.
-        # That's fine — load_dotenv() in the backend will handle the local case.
         pass
 
 
 # ── Backend imports ────────────────────────────────────────────────────────────
-# Imported after the secrets bridge so modules that build API clients on import
-# (e.g. bid_memory's Voyage client, response_drafter's Anthropic client) find
-# their keys already present in the environment.
 try:
     from rfp_parser import extract_text, parse_rfp
     from bid_memory import ingest_bids, find_relevant_chunks
@@ -166,9 +151,6 @@ def criterion_is_addressed(criterion_text: str, draft_sections: list) -> bool:
 
 
 # ── Helper: render a draft with readable [NEEDS CUSTOM INPUT] callouts ──────────
-# A flag's explanation may sit inside the brackets ("[NEEDS CUSTOM INPUT: do X]")
-# or as normal text after them ("[NEEDS CUSTOM INPUT] do X"). Either way we show
-# a clean amber callout: the bracketed tag as a label, the explanation as body.
 _FLAG_RE = re.compile(r"\[NEEDS CUSTOM INPUT[^\]]*\]")
 
 def render_draft(draft_text: str) -> None:
