@@ -1,14 +1,6 @@
 """
-rfp_parser.py
--------------
 Takes a PDF path as a command-line argument, extracts text using PyMuPDF,
 then calls Claude to parse it into structured JSON.
-
-Usage:
-    python3 rfp_parser.py your_rfp.pdf
-
-Dependencies:
-    pip3 install anthropic pymupdf python-dotenv --break-system-packages
 """
 #imports for sys.argv, json.loads(), os.path, PyMuPDF, Claude SDK, and env file reading
 import sys       
@@ -21,16 +13,9 @@ from dotenv import load_dotenv
 # Loads api-key from .env file 
 load_dotenv()
 
-# ─────────────────────────────────────────────
-# FUNCTION 1: Extract raw text from a PDF file
-# ─────────────────────────────────────────────
 
+# Opens a PDF and extracts raw text, returning it all as a string
 def extract_text(pdf_path: str) -> str:
-    """
-      Opens a PDF and returns all its text as a single string. 
-    
-    """
-
     # Checks if the file actually exists before PyMuPDF tries to open it
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
@@ -58,26 +43,16 @@ def extract_text(pdf_path: str) -> str:
     return full_text
 
 
-# ─────────────────────────────────────────────
-# HELPER: Clean up Claude's response into valid JSON
-# ─────────────────────────────────────────────
 
+# helper function to parse the JSON as Claude (well back then) occasionally wraps its JSON in markdown code fences since json.loads() fails
+# on anything that isn't pure JSON. This function strips those wrappers before parsing.
 def parse_json_response(text: str) -> dict:
     """
-    Defensive JSON parser.
-
-    WHY this exists:
-        Even with a well-crafted prompt, Claude occasionally wraps its
-        JSON in markdown code fences (```json ... ```) or adds a one-line
-        preamble. json.loads() fails on anything that isn't pure JSON.
-
-        This function strips those wrappers before parsing.
-
     The two failure modes it handles:
         1. Claude returns:  ```json\n{...}\n```
         2. Claude returns:  Here is the JSON:\n{...}
     """
-
+    
     text = text.strip()
 
     # Handle markdown code fences: ```json ... ``` or ``` ... ``` by splitting the text by lines
@@ -89,19 +64,10 @@ def parse_json_response(text: str) -> dict:
     return json.loads(text)
 
 
-# ─────────────────────────────────────────────
-# FUNCTION 2: Parse RFP text into structured JSON using Claude
-# ─────────────────────────────────────────────
-
+# Sends the extracted RFP text to Claude with 0 temperature and very detailed system prompt and returns a structured dict with
+# project name, client, deadline, requirements, evaluation criteria, and bonding requirement truncating at 200k character 
 def parse_rfp(text: str) -> dict:
     """
-    Sends the extracted RFP text to Claude and returns a structured dict.
-
-    WHY a detailed system prompt:
-        Claude is a language model — it defaults to conversational responses.
-        Without explicit instructions it might say "Sure! Here's what I found..."
-        which breaks json.loads() immediately.
-
         Four techniques used here to force clean JSON:
         1. Explicit instruction: "Return ONLY valid JSON"
         2. Schema definition: exact keys, types, and fallback values
@@ -169,23 +135,8 @@ Return nothing except this JSON object."""
     return parse_json_response(raw_response)
 
 
-# ─────────────────────────────────────────────
-# MAIN: Wire everything together
-# ─────────────────────────────────────────────
-
+#CLI entry point that strings everything together and runs the file standalone to test parsing
 def main():
-    """
-    Entry point. Reads the PDF path from the command line, runs the pipeline,
-    prints the JSON result.
-
-    WHY sys.argv:
-        sys.argv is a list of command-line arguments.
-        sys.argv[0] is always the script name itself.
-        sys.argv[1] is the first argument the user passes — in our case, the PDF path.
-        Running: python3 rfp_parser.py test_rfp.pdf
-        Gives:   sys.argv = ["rfp_parser.py", "test_rfp.pdf"]
-    """
-
     # Guard: make sure the user actually provided a PDF path
     if len(sys.argv) < 2:
         print("Usage: python3 rfp_parser.py <path_to_pdf>")
