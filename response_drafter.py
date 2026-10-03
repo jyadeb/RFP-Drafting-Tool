@@ -32,10 +32,7 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 # The model to use. Sonnet balances quality and cost well for generation tasks.
 MODEL = "claude-sonnet-5-5"
 
-
-# 
 # These system prompts are defined as module-level constants as they are configuration and you can load from files or prompt registry in prod. 
-
 # Parse system prompt for extracting structured meaning from raw RFP requirement text.
 PARSE_SYSTEM_PROMPT = """You are an expert at analyzing RFP (Request for Proposal) requirements 
 for BC construction and engineering firms.
