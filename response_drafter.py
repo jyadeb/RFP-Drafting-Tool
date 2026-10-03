@@ -1,18 +1,11 @@
 """
-response_drafter.py
-────────────────────────────────────────────────────────────────
 Purpose:
   Implements the 3-step chaining workflow for RFP bid response drafting.
-  
-  Chain:
     Step 1 (PARSE)    – Understand what the requirement is actually asking for
-    Step 2 (RETRIEVE) – Find relevant past bid excerpts (passed in from RAG layer)
+    Step 2 (RETRIEVE) – Find relevant past bid chunks
     Step 3 (DRAFT)    – Write the bid section using requirement + evidence
 
-  Why chain instead of one call?
-  Each step has a different cognitive job. Separating them means each Claude
-  call can be optimised for a single purpose — parse well, retrieve well,
-  draft well — rather than mediocrely at all three simultaneously.
+  Separate calls for each different cognitive job for Claude to have a single, focused prupose on each call rather than simultaenously doing all of them. 
 
 Usage:
   result = draft_section(requirement_text, retrieved_chunks)
@@ -30,31 +23,20 @@ import json
 import anthropic
 from dotenv import load_dotenv
 
-# ─── Environment setup ────────────────────────────────────────────────────────
-# load_dotenv() reads the .env file in your project root and puts the values
-# into os.environ so the rest of the script can access them securely.
-# This means your API key is never hardcoded into source files.
+# environment setup, securely storing and accessing api keys
 load_dotenv()
 
 # Create one Anthropic client. We reuse this across all three API calls
-# so we don't create/destroy connections unnecessarily.
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
-# The model to use. Sonnet 4 balances quality and cost well for generation tasks.
-# For a pure parsing/classification step, you could use Haiku to save money —
-# this is a cost optimization you'd add in production.
-MODEL = "claude-sonnet-4-6"
+# The model to use. Sonnet balances quality and cost well for generation tasks.
+MODEL = "claude-sonnet-5-5"
 
 
-# ─── SYSTEM PROMPTS ────────────────────────────────────────────────────────────
-# These are defined as module-level constants because:
-# 1. They never change at runtime — they're configuration, not logic
-# 2. Keeping them at the top makes them easy to find and iterate on
-# 3. In production you'd load these from files or a prompt registry
+# 
+# These system prompts are defined as module-level constants as they are configuration and you can load from files or prompt registry in prod. 
 
-# ── Step 1: Parse system prompt ──
-# Job: extract structured meaning from raw RFP requirement text.
-# We want Claude to identify WHAT is being asked, not to draft anything yet.
+# Parse system prompt for extracting structured meaning from raw RFP requirement text.
 PARSE_SYSTEM_PROMPT = """You are an expert at analyzing RFP (Request for Proposal) requirements 
 for BC construction and engineering firms.
 
@@ -78,15 +60,8 @@ Respond ONLY with a JSON object. No preamble, no explanation outside the JSON.
 </output_format>"""
 
 
-# ── Step 3: Draft system prompt ──
-# This is the most important prompt. It determines the quality of the final output.
-# Three techniques applied here:
-#   1. XML tags — clearly delineates requirement vs. evidence vs. example
-#   2. Few-shot example — shows exactly what a good output looks like
-#   3. Explicit do-not rules — prevents the specific failure modes that matter most
-#
-# Why spend 30 minutes here? Because this prompt runs on every single section
-# of every bid. A 10% quality improvement here compounds across the entire document.
+# Draft system prompt which determines the quality of the final output applying XML tags, reference example outputs, and
+# explicit rules to prevent specific failure modes.
 DRAFT_SYSTEM_PROMPT =DRAFT_SYSTEM_PROMPT = """You are drafting a bid response section for a BC construction 
 firm responding to a BC Housing RFP.
 
@@ -212,30 +187,10 @@ Respond ONLY with a JSON object. No text outside the JSON.
 </instructions>"""
 
 
-# ─── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
+#HELPER FUNCTIONS
 
+# wraps around every Anthropic API call to handle errors like network issues, rate limits, improper inputs. 
 def safe_api_call(messages: list, system_prompt: str, step_name: str):
-    """
-    Wrapper around the Anthropic API that handles errors cleanly.
-    
-    Why a wrapper?
-    Every API call can fail — network issues, rate limits, malformed input.
-    Rather than letting exceptions crash the entire pipeline, we catch them
-    here and return a (value, error) tuple. The caller decides what to do.
-    
-    Why (value, error) tuple pattern?
-    This is the convention we've used throughout your agency tooling.
-    It makes error handling explicit and consistent — no hidden exceptions.
-    
-    Args:
-        messages:    List of message dicts [{"role": "user", "content": "..."}]
-        system_prompt: The system prompt string for this call
-        step_name:   Human-readable label for logging (e.g., "PARSE", "DRAFT")
-    
-    Returns:
-        (response_text, None) on success
-        (None, error_message) on failure
-    """
     try:
         response = client.messages.create(
             model=MODEL,
@@ -243,44 +198,23 @@ def safe_api_call(messages: list, system_prompt: str, step_name: str):
             system=system_prompt,
             messages=messages
         )
-        # response.content is a list of content blocks.
         # For a standard text response, we want content[0].text.
         # The strip() removes any leading/trailing whitespace.
         return response.content[0].text.strip(), None
     
     except anthropic.AuthenticationError as e:
-        # Bad API key — no point retrying
+        # Bad API key, no point retrying
         return None, f"[{step_name}] Authentication failed. Check your ANTHROPIC_API_KEY: {e}"
     
     except anthropic.RateLimitError as e:
-        # Too many requests — would retry with backoff in production
         return None, f"[{step_name}] Rate limit hit. Consider adding retry logic: {e}"
     
     except anthropic.APIError as e:
-        # Generic API error — log and surface
         return None, f"[{step_name}] API error: {e}"
 
 
 def parse_json_response(raw_text: str, step_name: str):
-    """
-    Safely parse a JSON string returned by Claude.
-    
-    Why does this need its own function?
-    Even when you tell Claude "respond ONLY with JSON", it occasionally wraps
-    the output in markdown code fences (```json ... ```). This function strips
-    those fences before parsing. Fragile JSON handling is a common failure mode
-    in production AI pipelines.
-    
-    Args:
-        raw_text:  The raw string from Claude's response
-        step_name: For error messages
-    
-    Returns:
-        (parsed_dict, None) on success
-        (None, error_message) on failure
-    """
     # Strip markdown code fences if present
-    # Claude sometimes outputs: ```json\n{...}\n```
     cleaned = raw_text
     if cleaned.startswith("```"):
         # Find the first newline (end of opening fence) and last ``` (closing fence)
@@ -295,30 +229,8 @@ def parse_json_response(raw_text: str, step_name: str):
         return None, f"[{step_name}] Failed to parse JSON response: {e}\nRaw text: {raw_text[:200]}"
 
 
-# ─── STEP 1: PARSE ─────────────────────────────────────────────────────────────
-
+# Step 1 of the chain, parsing a raw RFP requirement into structured form 
 def parse_requirement(requirement_text: str):
-    """
-    Step 1 of the chain: parse a raw RFP requirement into structured form.
-    
-    WHY this step exists:
-    Raw RFP requirements are often dense, legal-sounding paragraphs that mix
-    multiple asks together. Before retrieving evidence or drafting, we need
-    to understand: what is this requirement ACTUALLY asking for?
-    
-    This parse step extracts:
-    - The core ask (what does the evaluator want demonstrated?)
-    - Specific qualifiers (certifications, standards, thresholds)
-    - What evidence types would satisfy it
-    - Keywords for searching past bids
-    
-    Args:
-        requirement_text: Raw text of the RFP requirement
-    
-    Returns:
-        (parsed_dict, None) on success — parsed_dict contains the structured requirement
-        (None, error_message) on failure
-    """
     messages = [
         {
             "role": "user",
@@ -337,43 +249,14 @@ def parse_requirement(requirement_text: str):
     return parsed, None
 
 
-# ─── STEP 2: FORMAT RETRIEVED CHUNKS ───────────────────────────────────────────
-
+# Format retrieved RAG chunks into the XML prompt structure
 def format_chunks_for_prompt(retrieved_chunks: list) -> str:
-    """
-    Format retrieved RAG chunks into the XML structure the draft prompt expects.
-    
-    WHY format matters:
-    The draft system prompt uses <past_bid_excerpts> tags. If we pass raw chunks
-    without this structure, Claude loses the context of what role the text plays.
-    Proper formatting = better output.
-    
-    This function sits between your RAG retrieval layer (which produces a list
-    of chunk dicts) and the draft call (which expects formatted XML).
-    
-    Args:
-        retrieved_chunks: List of dicts from your RAG pipeline, each with:
-                          - "text": str (the chunk content)
-                          - "source": str (filename or document identifier)
-                          - optionally "doc_type": str
-    
-    Returns:
-        Formatted XML string ready to embed in the prompt
-    
-    Example output:
-        <past_bid_excerpts>
-        <excerpt source="Kelowna_RFP_2023.txt">
-        We have delivered...
-        </excerpt>
-        </past_bid_excerpts>
-    """
     if not retrieved_chunks:
         return "<past_bid_excerpts>\nNo relevant past bid excerpts found.\n</past_bid_excerpts>"
     
     excerpts_xml = "<past_bid_excerpts>\n"
     for chunk in retrieved_chunks:
-        # Pull source from the chunk dict — default to "unknown" if not present
-        # This is defensive programming: never assume the dict has all keys
+        # Pull source from the chunk dict, default to "unknown" if not present
         source = chunk.get("source", "unknown")
         text = chunk.get("text", "")
         excerpts_xml += f'<excerpt source="{source}">\n{text}\n</excerpt>\n'
@@ -382,62 +265,26 @@ def format_chunks_for_prompt(retrieved_chunks: list) -> str:
     return excerpts_xml
 
 
-# ─── STEP 3: DRAFT ─────────────────────────────────────────────────────────────
+# main function that runs parse, formatting chunks, and draft. Also, validates that the draft's JSON has the
+# required keys (requirement, draft, confidence, confidence_reason), falling back to LOW confidence if the model returns something unexpected.
 
 def draft_section(requirement_text: str, retrieved_chunks: list) -> tuple:
-    """
-    The main public function — runs the full 3-step chain.
-    
-    This is the function your calling code uses. It orchestrates:
-      Step 1: Parse the requirement to understand it clearly
-      Step 2: Format the retrieved chunks (from your RAG layer)
-      Step 3: Draft the bid section using requirement + evidence
-    
-    The caller doesn't need to know about the intermediate steps —
-    they just pass in a requirement and chunks, and get back a draft dict.
-    
-    Args:
-        requirement_text:  The raw RFP requirement text to respond to
-        retrieved_chunks:  List of relevant chunk dicts from your RAG pipeline
-                           Each dict should have "text" and "source" keys
-    
-    Returns:
-        (result_dict, None) on success — result_dict has:
-            {
-              "requirement": str,
-              "draft": str,
-              "confidence": "HIGH" | "MEDIUM" | "LOW",
-              "confidence_reason": str
-            }
-        (None, error_message) on failure
-    """
-    
-    # ── Step 1: Parse the requirement ──────────────────────────────────────────
-    # We parse first because the parsed understanding could be used to validate
-    # whether retrieved chunks are actually relevant. In production you'd use
-    # the search_keywords from parsing to trigger a second, more targeted retrieval.
+  # Step 1: Parse requirements
     print(f"\n[CHAIN] Step 1: Parsing requirement...")
     parsed_req, error = parse_requirement(requirement_text)
     if error:
         print(f"  ✗ Parse failed: {error}")
-        # Graceful degradation: if parsing fails, continue without it.
+        # If parsing fails, continue without it.
         # The draft step can still run on raw requirement text.
-        # In production you'd log this and potentially alert.
         parsed_req = None
     else:
         print(f"  ✓ Core ask: {parsed_req.get('core_ask', 'unknown')}")
     
-    # ── Step 2: Format retrieved chunks ────────────────────────────────────────
-    # The retrieved_chunks come from your RAG layer (rag_pipeline.py).
-    # We format them into the XML structure the draft prompt expects.
+    # Step 2: Format retrieved chunks
     print(f"[CHAIN] Step 2: Formatting {len(retrieved_chunks)} retrieved chunks...")
     formatted_excerpts = format_chunks_for_prompt(retrieved_chunks)
     
-    # ── Step 3: Draft the bid section ──────────────────────────────────────────
-    # Build the user message using XML tags.
-    # WHY XML tags here (in the user message, not just system prompt)?
-    # Because we're passing two distinct types of content — the requirement
-    # and the evidence — and Claude needs to know which is which.
+    # Step 3: Draft the bid section, building the user message with XML tags
     print(f"[CHAIN] Step 3: Drafting bid section...")
     
     user_message = f"""<requirement> 
@@ -447,8 +294,7 @@ def draft_section(requirement_text: str, retrieved_chunks: list) -> tuple:
     {formatted_excerpts}"""
     
     # If parsing succeeded, we can optionally include the structured understanding
-    # to give the model even more context. This is "chain augmentation" — each
-    # step can enrich the context for the next.
+    # to give the model even more context.
     if parsed_req:
         core_ask = parsed_req.get("core_ask", "")
         evidence_types = ", ".join(parsed_req.get("evidence_types_needed", []))
@@ -469,7 +315,7 @@ Evidence types that would satisfy this: {evidence_types}
     if error:
         return None, error
     
-    # Validate the result has the expected keys — defensive programming
+    # Validate the result has the expected keys 
     required_keys = {"requirement", "draft", "confidence", "confidence_reason"}
     missing_keys = required_keys - set(result.keys())
     if missing_keys:
@@ -478,7 +324,7 @@ Evidence types that would satisfy this: {evidence_types}
     # Validate confidence is a valid value
     valid_confidence = {"HIGH", "MEDIUM", "LOW"}
     if result.get("confidence") not in valid_confidence:
-        # Don't fail hard — just normalise to LOW if unexpected value
+        # Don't fail hard, just normalise to LOW if unexpected value
         result["confidence"] = "LOW"
         result["confidence_reason"] = f"(original confidence value was invalid: {result.get('confidence')})"
     
@@ -486,11 +332,7 @@ Evidence types that would satisfy this: {evidence_types}
     return result, None
 
 
-# ─── TEST HARNESS ──────────────────────────────────────────────────────────────
-# This block only runs when you execute this file directly (python response_drafter.py)
-# When another file imports this module (e.g., from response_drafter import draft_section),
-# this block is SKIPPED. This is what `if __name__ == "__main__":` does.
-
+# Test block only runs when you execute this file directly
 if __name__ == "__main__":
     
     print("=" * 60)
@@ -505,8 +347,6 @@ if __name__ == "__main__":
     including any COR (Certificate of Recognition) certification and total recordable 
     incident rate (TRIR) over the past three years."""
     
-    # In real usage these would come from your RAG pipeline.
-    # For testing we simulate them as plain dicts.
     chunks_1 = [
         {
             "source": "Langley_Commercial_Bid_2023.txt",
