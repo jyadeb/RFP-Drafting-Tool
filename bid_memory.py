@@ -1,21 +1,7 @@
 """
-bid_memory.py
--------------
 Ingests past bid documents into a ChromaDB vector store using Voyage AI embeddings.
 Provides semantic retrieval: given a query, returns the most relevant chunks
 from your ingested documents.
-
-Usage (as a script):
-    python3 bid_memory.py
-
-Usage (imported by another module):
-    from bid_memory import ingest_bids, find_relevant_chunks
-
-Dependencies:
-    pip3 install voyageai chromadb python-dotenv --break-system-packages
-
-Environment variables required in .env:
-    VOYAGE_API_KEY=your_voyage_key
 """
 
 import os
@@ -29,7 +15,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Clients ────────────────────────────────────────────────────────────────────
+# Clients
 voyage_client = voyageai.Client(api_key=os.getenv("VOYAGE_API_KEY"))
 
 chroma_client = chromadb.Client()
@@ -38,7 +24,7 @@ chroma_client = chromadb.Client()
 _collections: dict[str, object] = {}
 _COLLECTIONS_LOCK = threading.Lock()
 
-# ── Concurrency controls ───────────────────────────────────────────────────────
+# Concurrency controls
 _EMBED_SEMAPHORE = threading.Semaphore(3)
 _CHROMA_LOCK     = threading.Lock()
 
@@ -53,9 +39,7 @@ def _get_collection(client_id: str):
             )
         return _collections[client_id]
 
-
-# ── FUNCTION 1: chunk_text ─────────────────────────────────────────────────────
-
+#chunking document with overlap into ~700 characters with 2 sentence overlap
 def chunk_text(text: str, size: int = 700) -> list[str]:
     """Split text into overlapping sentence-boundary chunks."""
     sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -83,10 +67,8 @@ def chunk_text(text: str, size: int = 700) -> list[str]:
     return chunks
 
 
-# ── FUNCTION 2: helpers used by ingest_one_doc ─────────────────────────────────
-
+# reads file by extracting text from a PDF or .txt via PyMuPDF
 def _read_file(filepath: str) -> str:
-    """Extract text from a PDF or plain-text file."""
     if filepath.lower().endswith(".pdf"):
         import fitz
         pages = []
@@ -101,8 +83,8 @@ def _read_file(filepath: str) -> str:
             return f.read()
 
 
+# Uses Voyage AI to embed a list of text chunks, turning text into vectors to be able to semantically search
 def _embed_chunks(chunks: list[str]) -> list:
-    """Call Voyage AI to embed a list of text chunks. Rate-limited by caller."""
     result = voyage_client.embed(
         texts=chunks,
         model="voyage-3-lite",
@@ -111,8 +93,8 @@ def _embed_chunks(chunks: list[str]) -> list:
     return result.embeddings
 
 
+# stores vectors in chromaDB database with multi-tenacy for different clients
 def _store_chunks(filepath: str, chunks: list[str], embeddings: list, client_id: str) -> None:
-    """Write chunks + embeddings to the client's ChromaDB collection under a lock."""
     source_name = os.path.basename(filepath)
     ids        = [f"{source_name}_chunk_{i}" for i in range(len(chunks))]
     metadatas  = [{"source": source_name, "chunk_index": i, "total_chunks": len(chunks)}
@@ -127,14 +109,9 @@ def _store_chunks(filepath: str, chunks: list[str], embeddings: list, client_id:
         )
 
 
-# ── FUNCTION 3: ingest_one_doc ─────────────────────────────────────────────────
+# ingesting one document, read --> chunk --> embed --> store. Task is run inside a thread and errors are returned.
 
 def _ingest_one_doc(filepath: str, client_id: str) -> tuple:
-    """
-    Read → chunk → embed → store for a single file.
-    Runs inside a thread. Returns (filepath, num_chunks, error_or_None).
-    Errors are returned, not raised, so the thread pool can report them.
-    """
     with _EMBED_SEMAPHORE:
         try:
             if not os.path.exists(filepath):
@@ -148,20 +125,10 @@ def _ingest_one_doc(filepath: str, client_id: str) -> tuple:
             return (filepath, 0, str(e))
 
 
-# ── FUNCTION 4: ingest_bids ────────────────────────────────────────────────────
+# Ingests multiple bid documents in parallel into the ChromaDB database so with a list of file paths and client ID with 3 workers using a ThreadPoolExecuter
+# doing multipled files at once but keeping consideration for rate limit
 
 def ingest_bids(filepaths: list[str], client_id: str = "default", progress_callback=None) -> dict:
-    """
-    Ingest multiple bid documents in parallel into a client-scoped ChromaDB collection.
-
-    Args:
-        filepaths:         List of file paths (.pdf or .txt)
-        client_id:         Scopes the ChromaDB collection — each client's bids are separate.
-        progress_callback: Optional function(completed, total, filename) for UI progress updates.
-
-    Returns:
-        {"succeeded": int, "failed": [(path, error), ...], "total_chunks": int}
-    """
     total        = len(filepaths)
     succeeded    = 0
     failed       = []
@@ -197,12 +164,8 @@ def ingest_bids(filepaths: list[str], client_id: str = "default", progress_callb
     return {"succeeded": succeeded, "failed": failed, "total_chunks": total_chunks}
 
 
-# ── FUNCTION 5: find_relevant_chunks ──────────────────────────────────────────
-
+# semantic search/RAG retrieval used to find relevant past experience for you. Embeds a search queryand uses cosine distance to return the n most similar chunks
 def find_relevant_chunks(query: str, client_id: str = "default", n: int = 3) -> list[dict]:
-    """
-    Embed a query and return the n most similar chunks from this client's ChromaDB collection.
-    """
     query_result = voyage_client.embed(
         texts=[query],
         model="voyage-3-lite",
@@ -227,8 +190,7 @@ def find_relevant_chunks(query: str, client_id: str = "default", n: int = 3) -> 
     ]
 
 
-# ── MAIN: smoke test ───────────────────────────────────────────────────────────
-
+#main, test
 if __name__ == "__main__":
     results = ingest_bids(["past_bids/past_bid_1.txt",
                            "past_bids/past_bid_2.txt",
