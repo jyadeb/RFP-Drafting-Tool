@@ -1,4 +1,4 @@
-# session.py
+# save/reload a completed run so a client doesn't have to reprocess every file.
 
 import json
 import os
@@ -6,7 +6,7 @@ import re
 from datetime import date
 
 # Always save sessions relative to this file's location, not the working directory.
-# This means sessions are found regardless of where `streamlit run` is called from.
+# This means sessions are found regardless of where "streamlit run" is called from.
 _SESSIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sessions")
 
 
